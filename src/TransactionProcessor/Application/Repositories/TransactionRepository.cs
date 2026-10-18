@@ -1,7 +1,7 @@
-using System.Text.Json;
 using Dapper;
 using TransactionProcessor.Application.Domain.Constants;
 using TransactionProcessor.Application.Domain.Entities;
+using TransactionProcessor.Application.Domain.Exceptions;
 using TransactionProcessor.Application.Repositories.Contracts;
 using TransactionProcessor.Application.Services;
 
@@ -21,16 +21,20 @@ public class TransactionRepository : ITransactionRepository
     public async Task InsertAsync(TransactionEntity transaction, CancellationToken cancellationToken = default)
     {
         using var connection = _dapperService.CreateConnection();
-        var payload = JsonSerializer.Serialize(transaction);
+        var payload = DapperService.SerializePayload(transaction);
 
         var result = await connection.QueryFirstOrDefaultAsync<ProcResult>(
             AppConstants.StoredProcedures.InsertTransaction,
             new { Payload = payload },
             commandType: System.Data.CommandType.StoredProcedure);
 
-        if (result?.ErrorCode != 0)
-            throw new InvalidOperationException($"InsertTransaction failed: [{result?.ErrorCode}] {result?.ErrorMessage}");
+        if (result == null || result.ErrorCode != 0)
+            throw new StoredProcedureException(AppConstants.StoredProcedures.InsertTransaction, result?.ErrorCode ?? -1, result?.ErrorMessage);
     }
 
-    private record ProcResult(int ErrorCode, string? ErrorMessage);
+    private class ProcResult
+    {
+        public int ErrorCode { get; set; }
+        public string? ErrorMessage { get; set; }
+    }
 }

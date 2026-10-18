@@ -4,13 +4,11 @@ using TransactionProcessor.Application.Services.Contracts;
 
 namespace TransactionProcessor.Application.Services.Hosted;
 
-public class MockDataIngestionHostedService : IHostedService, IDisposable
+public class MockDataIngestionHostedService : BackgroundService
 {
     private readonly IKafkaProducerService _producer;
     private readonly ILoggingService _logger;
     private readonly IConfiguration _configuration;
-    private System.Timers.Timer? _timer;
-    private readonly SemaphoreSlim _semaphore = new(1, 1);
 
     private static readonly Random _random = Random.Shared;
 
@@ -24,29 +22,26 @@ public class MockDataIngestionHostedService : IHostedService, IDisposable
         _configuration = configuration;
     }
 
-    public Task StartAsync(CancellationToken cancellationToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var intervalSeconds = _configuration.GetValue("MockData:IntervalSeconds", 5);
-        _timer = new System.Timers.Timer(intervalSeconds * 1000);
-        _timer.Elapsed += async (_, _) => await PublishBatchAsync();
-        _timer.AutoReset = true;
-        _timer.Start();
-
         _logger.LogInformation("MockDataIngestionHostedService started. Publishing every {Seconds}s", intervalSeconds);
-        return Task.CompletedTask;
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(intervalSeconds), stoppingToken);
+            await PublishBatchAsync(stoppingToken);
+        }
     }
 
-    public Task StopAsync(CancellationToken cancellationToken)
+    public override async Task StopAsync(CancellationToken cancellationToken)
     {
-        _timer?.Stop();
+        await base.StopAsync(cancellationToken);
         _producer.Flush(TimeSpan.FromSeconds(5));
-        return Task.CompletedTask;
     }
 
-    private async Task PublishBatchAsync()
+    private async Task PublishBatchAsync(CancellationToken stoppingToken)
     {
-        if (!await _semaphore.WaitAsync(0)) return;
-
         try
         {
             var batchSize = _configuration.GetValue("MockData:BatchSize", 5);
@@ -57,18 +52,15 @@ public class MockDataIngestionHostedService : IHostedService, IDisposable
                 await _producer.ProduceAsync(
                     AppConstants.Kafka.TransactionEventsTopic,
                     evt.ClientId,
-                    evt);
+                    evt,
+                    stoppingToken);
             }
 
             _logger.LogInformation("Published {Count} mock transaction events to Kafka", events.Count);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
         {
             _logger.LogError(ex, "Error publishing mock data batch");
-        }
-        finally
-        {
-            _semaphore.Release();
         }
     }
 
@@ -89,15 +81,21 @@ public class MockDataIngestionHostedService : IHostedService, IDisposable
 
     private static TransactionEvent GenerateEvent(string source, string clientId)
     {
-        var (merchants, type, minAmount, maxAmount) = source switch
+        var (merchants, minAmount, maxAmount) = source switch
         {
-            "BankAccount" => (AppConstants.MockData.BankMerchants, GetBankType(), 50m, 50000m),
-            "CreditCard" => (AppConstants.MockData.CreditCardMerchants, "Debit", 20m, 5000m),
-            "Investment" => (AppConstants.MockData.InvestmentMerchants, GetInvestmentType(), 500m, 100000m),
-            _ => (AppConstants.MockData.BankMerchants, "Debit", 50m, 1000m)
+            "BankAccount" => (AppConstants.MockData.BankMerchants, 50m, 50000m),
+            "CreditCard" => (AppConstants.MockData.CreditCardMerchants, 20m, 5000m),
+            "Investment" => (AppConstants.MockData.InvestmentMerchants, 500m, 100000m),
+            _ => (AppConstants.MockData.BankMerchants, 50m, 1000m)
         };
 
         var merchant = merchants[_random.Next(merchants.Length)];
+        var type = source switch
+        {
+            "BankAccount" => GetBankType(merchant),
+            "Investment" => GetInvestmentType(),
+            _ => "Debit"
+        };
         var amount = Math.Round((decimal)(_random.NextDouble() * (double)(maxAmount - minAmount) + (double)minAmount), 2);
 
         return new TransactionEvent
@@ -116,18 +114,9 @@ public class MockDataIngestionHostedService : IHostedService, IDisposable
         };
     }
 
-    private static string GetBankType()
-    {
-        var merchant = AppConstants.MockData.BankMerchants[Random.Shared.Next(AppConstants.MockData.BankMerchants.Length)];
-        return merchant.Contains("SALARY") || merchant.Contains("WAGES") ? "Credit" : "Debit";
-    }
+    private static string GetBankType(string merchant) =>
+        merchant.Contains("SALARY") || merchant.Contains("WAGES") ? "Credit" : "Debit";
 
     private static string GetInvestmentType() =>
         Random.Shared.Next(2) == 0 ? "Debit" : "Credit";
-
-    public void Dispose()
-    {
-        _timer?.Dispose();
-        _semaphore.Dispose();
-    }
 }

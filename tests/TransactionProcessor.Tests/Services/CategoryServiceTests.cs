@@ -18,6 +18,13 @@ public class CategoryServiceTests
     [InlineData("SPUR RESTAURANTS FOURWAYS", "Dining", 5)]
     [InlineData("DISCHEM PHARMACY", "Healthcare", 6)]
     [InlineData("UNKNOWN MERCHANT XYZ", "Other", 99)]
+    [InlineData("DEBIT ORDER NETFLIX", "Entertainment", 4)]
+    [InlineData("DEBIT ORDER VODACOM", "Utilities", 3)]
+    [InlineData("UBER EATS", "Dining", 5)]
+    [InlineData("UBER TRIP", "Travel", 7)]
+    [InlineData("EFT PAYMENT", "Transfer", 10)]
+    [InlineData("GAUTRAIN STATION", "Other", 99)]
+    [InlineData("SPARK SCHOOLS", "Other", 99)]
     public void Categorise_ShouldReturnCorrectCategory(string merchant, string expectedName, int expectedId)
     {
         var evt = new TransactionEvent { MerchantName = merchant, Description = merchant };

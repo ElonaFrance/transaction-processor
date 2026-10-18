@@ -1,0 +1,14 @@
+# Build output
+bin/
+obj/
+*.user
+
+# IDE / OS
+.idea/
+.vs/
+.vscode/
+.DS_Store
+
+# Local tooling
+.claude/
+.claude-flow/

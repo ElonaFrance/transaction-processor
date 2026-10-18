@@ -5,13 +5,19 @@ public static class AppConstants
     public static class Kafka
     {
         public const string TransactionEventsTopic = "transaction-events";
+        public const string DeadLetterTopic = "transaction-events-dlq";
         public const string ConsumerGroupId = "transaction-processor-group";
     }
 
     public static class StoredProcedures
     {
         public const string InsertTransaction = "usp_InsertTransaction";
-        public const string UpsertAggregation = "usp_UpsertAggregation";
+    }
+
+    public static class MySql
+    {
+        // 1205 = lock wait timeout, 1213 = deadlock
+        public static readonly int[] TransientErrorCodes = [1205, 1213];
     }
 
     public static class MockData

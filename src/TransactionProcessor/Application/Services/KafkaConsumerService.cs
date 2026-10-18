@@ -21,7 +21,6 @@ public class KafkaConsumerService : IKafkaConsumerService, IDisposable
             GroupId = AppConstants.Kafka.ConsumerGroupId,
             AutoOffsetReset = AutoOffsetReset.Earliest,
             EnableAutoCommit = false,
-            EnablePartitionEof = true,
             SessionTimeoutMs = 30000
         };
 
@@ -29,10 +28,11 @@ public class KafkaConsumerService : IKafkaConsumerService, IDisposable
         _consumer = new ConsumerBuilder<string, string>(config).Build();
     }
 
+    public void Subscribe(string topic) => _consumer.Subscribe(topic);
+
     public async Task<IEnumerable<ConsumeResult<string, string>>> ConsumeBatchAsync(
-        string topic, int batchSize, int windowSeconds, CancellationToken cancellationToken)
+        int batchSize, int windowSeconds, CancellationToken cancellationToken)
     {
-        _consumer.Subscribe(topic);
         var batch = new List<ConsumeResult<string, string>>();
         var deadline = DateTime.UtcNow.AddSeconds(windowSeconds);
 
@@ -41,12 +41,12 @@ public class KafkaConsumerService : IKafkaConsumerService, IDisposable
             try
             {
                 var result = _consumer.Consume(TimeSpan.FromMilliseconds(500));
-                if (result == null || result.IsPartitionEOF) break;
+                if (result == null) continue;
                 batch.Add(result);
             }
             catch (ConsumeException ex) when (!cancellationToken.IsCancellationRequested)
             {
-                _logger.LogWarning(ex, "Consume error on {Topic}", topic);
+                _logger.LogWarning(ex, "Consume error on {Topic}", ex.ConsumerRecord?.Topic);
                 await Task.Delay(500, cancellationToken);
             }
         }
@@ -54,10 +54,25 @@ public class KafkaConsumerService : IKafkaConsumerService, IDisposable
         return batch;
     }
 
+    // Commits the next offset to read for each partition in the batch, in one call.
     public void CommitOffsets(IEnumerable<ConsumeResult<string, string>> results)
     {
-        foreach (var result in results)
-            _consumer.Commit(result);
+        var offsets = results
+            .GroupBy(r => r.TopicPartition)
+            .Select(g => new TopicPartitionOffset(g.Key, g.Max(r => r.Offset.Value) + 1))
+            .ToList();
+
+        if (offsets.Count > 0)
+            _consumer.Commit(offsets);
+    }
+
+    // Moves each partition back to the first offset in the batch so it is consumed again on the next poll.
+    // Without this, skipping a commit is not enough: the consumer's in-memory position has already moved on,
+    // and the next successful commit would skip past the unprocessed messages.
+    public void Rewind(IEnumerable<ConsumeResult<string, string>> results)
+    {
+        foreach (var partition in results.GroupBy(r => r.TopicPartition))
+            _consumer.Seek(new TopicPartitionOffset(partition.Key, partition.Min(r => r.Offset.Value)));
     }
 
     private static void ApplySaslIfConfigured(ConsumerConfig config, IConfiguration configuration)
